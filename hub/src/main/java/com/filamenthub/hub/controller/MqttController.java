@@ -6,7 +6,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.annotation.PostConstruct;
 
@@ -30,6 +33,7 @@ import java.security.cert.X509Certificate;
  * Clase que se encarga de recibir y procesar los mensajes MQTT
  */
 @Component
+@RestController
 public class MqttController {
 
     private MqttAsyncClient client;                         // Cliente MQTT de Eclipse Paho                  // Servicio de datos (mediciones)
@@ -118,9 +122,9 @@ public class MqttController {
             }
             logger.info("Conectando al broker MQTT: {}", this.brokerUrl);
             client.connect(options).waitForCompletion();
-            logger.info("Conexión exitosa");
+            logger.info("Conexion exitosa");
             client.subscribe(this.topic, this.qos);
-            logger.info("Suscrito al tópico: {}", this.topic);
+            logger.info("Suscrito al topico: {}", this.topic);
         } catch (MqttException e) {
             logger.error("Error al conectar: {}", e.getMessage());
         }
@@ -151,6 +155,36 @@ public class MqttController {
         }*/
 
     }
+
+    /**
+     * Publica un mensaje en un tópico dinámico basado en deviceId y subTopic.
+     *
+     * @param deviceId ID del dispositivo (por ejemplo, "DeviceA", "DeviceB").
+     * @param subTopic Sub-tópico (por ejemplo, "motor", "cooler").
+     * @param payload  Mensaje JSON a publicar.
+     * @return Confirmación de la publicación.
+     */
+    @PostMapping("/{deviceId}/sub/{subTopic}")
+    public String publishDynamicMessage(
+            @PathVariable String deviceId,
+            @PathVariable String subTopic,
+            @RequestBody String payload) {
+        // Construcción del tópico dinámico
+        String dynamicTopic = deviceId + "/sub/" + subTopic;
+
+        try {
+            MqttMessage mqttMessage = new MqttMessage(payload.getBytes());
+            mqttMessage.setQos(this.qos); // Utiliza el QoS definido en application.properties
+            client.publish(dynamicTopic, mqttMessage); // Publica en el tópico dinámico
+
+            logger.info("Mensaje publicado al tópico {}: {}", dynamicTopic, payload);
+            return "Mensaje publicado exitosamente en el tópico: " + dynamicTopic;
+        } catch (MqttException e) {
+            logger.error("Error al publicar mensaje en el tópico {}: {}", dynamicTopic, e.getMessage());
+            return "Error al publicar el mensaje: " + e.getMessage();
+        }
+    }
+
 
     /**
      * Metodo que se encarga de configurar el contexto SSL con el certificado público de Let's Encrypt
