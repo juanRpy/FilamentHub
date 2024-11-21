@@ -11,6 +11,15 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.filamenthub.hub.model.Device;
+import com.filamenthub.hub.model.Measurement;
+import com.filamenthub.hub.model.User;
+import com.filamenthub.hub.service.DataService;
+import com.filamenthub.hub.service.DeviceService;
+import com.filamenthub.hub.service.MeasurementService;
+import com.filamenthub.hub.service.UserService;
+
 import jakarta.annotation.PostConstruct;
 
 import javax.net.ssl.SSLSocketFactory;
@@ -28,6 +37,8 @@ import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.time.ZonedDateTime;
+import java.util.Map;
 
 /**
  * Clase que se encarga de recibir y procesar los mensajes MQTT
@@ -36,8 +47,13 @@ import java.security.cert.X509Certificate;
 @RestController
 public class MqttController {
 
-    private MqttAsyncClient client;                         // Cliente MQTT de Eclipse Paho                  // Servicio de datos (mediciones)
+    private MqttAsyncClient client;   
+    private final DataService dataService;
+    private final DeviceService deviceService;
+    private final MeasurementService measurementService;
+    private final UserService userService;                      // Cliente MQTT de Eclipse Paho                  // Servicio de datos (mediciones)
     private static final Logger logger = LoggerFactory.getLogger(MqttController.class);
+
 
     @Value("${mqtt.broker.url}")    // Lee de application.properties el valor de mqtt.broker.url
     private String brokerUrl;
@@ -56,7 +72,11 @@ public class MqttController {
     /**
      * Constructor de la clase MqttController que inyecta los servicios necesarios
      */
-    public MqttController() {
+    public MqttController(UserService userService, MeasurementService measurementService, DeviceService deviceService, DataService dataService) {
+        this.userService = userService;
+        this.measurementService = measurementService;
+        this.deviceService = deviceService;
+        this.dataService = dataService;
     }
 
     /**
@@ -138,22 +158,46 @@ public class MqttController {
      */
     private void processMessage(String topic, MqttMessage message) {
         String payload = new String(message.getPayload());
-        logger.info("Mensaje recibido!!: {}", payload);
-        
-        /*try {
-            // Deserializar el JSON en un objeto Measurement
-            ObjectMapper objectMapper = new ObjectMapper();
-            Measurement measurement = objectMapper.readValue(payload, Measurement.class);
-    
-            logger.info("Datos guardados: Device ID: {}, Temperatura: {}, Humedad: {}",
-                        measurement.getDeviceId(),
-                        measurement.getTemperature(),
-                        measurement.getHumidity());
-    
-        } catch (Exception e) {
-            logger.error("Error al deserializar el mensaje JSON o guardar en la base de datos: {}", e.getMessage());
-        }*/
+        logger.info("Mensaje recibido en el topic '{}': {}", topic, payload);
 
+        try {
+            // Convertir el payload JSON a un Map
+            ObjectMapper objectMapper = new ObjectMapper();
+            Map<String, Object> jsonPayload = objectMapper.readValue(payload, Map.class);
+
+            // Obtener el usuario (puedes modificar la lógica si el usuario depende de otro campo)
+            String username = "default_user"; // Cambiar por el nombre de usuario real
+            User userObj = userService.getUser(username);
+
+            // Obtener el ID del dispositivo (supone que está incluido en el JSON)
+            String deviceId = (String) jsonPayload.get("device_id");
+
+            // Crear o recuperar el dispositivo
+            Device deviceObj = deviceService.getOrCreateDevice(deviceId, userObj);
+
+            // Iterar sobre las variables del JSON y registrar las mediciones
+            for (Map.Entry<String, Object> entry : jsonPayload.entrySet()) {
+                String variable = entry.getKey();
+
+                // Ignorar claves específicas que no representan mediciones
+                if ("device_id".equals(variable)) {
+                    continue;
+                }
+
+                float value = ((Number) entry.getValue()).floatValue();
+
+                // Obtener o crear la variable de medición
+                Measurement variableObj = measurementService.getOrCreateMeasurement(variable);
+
+                // Registrar la medición en la base de datos
+                dataService.createData(value, deviceObj, variableObj, ZonedDateTime.now());
+            }
+
+            logger.info("Datos procesados y registrados correctamente para el dispositivo '{}'", deviceId);
+
+        } catch (Exception e) {
+            logger.error("Error al procesar el mensaje MQTT: {}", e.getMessage(), e);
+        }
     }
 
     /**
